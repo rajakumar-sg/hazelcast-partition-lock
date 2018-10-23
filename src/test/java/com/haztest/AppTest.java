@@ -10,9 +10,9 @@ import com.hazelcast.core.MapLoader;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -39,35 +39,64 @@ public class AppTest {
 
         @Override
         public Iterable<String> loadAllKeys() {
-            return IntStream.range(1, 100).boxed()
-                    .map(String::valueOf)
-                    .collect(Collectors.toSet());
+            System.out.println("loadAllKeys() invoked");
+            return Collections.emptySet();
         }
 
         private String valueOf(String key) {
+            slowBy(10);
             return "Value For " + key;
+        }
+
+        private void slowBy(int secs) {
+            try {
+                Thread.sleep(secs * 1000L);
+            } catch (InterruptedException e) {
+                //ignore
+            }
         }
     }
 
     @Before
     public void setup() {
         Config config = new Config();
+        config.setProperty("hazelcast.map.partition.count", "1");
 
         MapStoreConfig storeConfig = new MapStoreConfig();
         storeConfig.setClassName(SlowMapLoader.class.getName());
-        storeConfig.setInitialLoadMode(MapStoreConfig.InitialLoadMode.LAZY);
+        storeConfig.setInitialLoadMode(MapStoreConfig.InitialLoadMode.EAGER);
 
-        MapConfig mapConfig = new MapConfig();
-        mapConfig.setName("TestMap");
-        mapConfig.setMapStoreConfig(storeConfig);
-        config.addMapConfig(mapConfig);
+        MapConfig slowMapConfig = new MapConfig();
+        slowMapConfig.setName("SlowMap");
+        slowMapConfig.setMapStoreConfig(storeConfig);
+        config.addMapConfig(slowMapConfig);
+
+        MapConfig normalMapConfig = new MapConfig();
+        normalMapConfig.setName("NormalMap");
+        config.addMapConfig(normalMapConfig);
 
         hazelcastInstance = Hazelcast.newHazelcastInstance(config);
+
+        IMap<String, String> normalMap = hazelcastInstance.getMap("NormalMap");
+        IntStream.range(1, 10).boxed()
+                .forEach(k -> normalMap.put(String.valueOf(k), "Normal Value " + k));
     }
 
     @Test
     public void shouldAnswerWithTrue() throws Exception {
-        IMap<String, String> testMap = hazelcastInstance.getMap("TestMap");
-        assertEquals("Value For 1", testMap.get("1"));
+        IMap<String, String> slowMap = hazelcastInstance.getMap("SlowMap");
+        IMap<String, String> normalMap = hazelcastInstance.getMap("NormalMap");
+
+        CompletableFuture<String> slowValue = CompletableFuture.supplyAsync(() -> slowMap.get("1"));
+
+        System.out.println(now() + " Invoking Normal Map ");
+        System.out.println("Value from normal map :" + normalMap.get("1"));
+        System.out.println(now() + " Invoking Normal Map completed.");
+
+        assertEquals("Value For 1", slowValue.get());
+    }
+
+    private String now() {
+        return new SimpleDateFormat("hh:mm:ss").format(new Date());
     }
 }
